@@ -13,68 +13,49 @@
 # The JSON will be written to:
 # ~/Downloads/VolatileTriage_YYYYMMDD_HHMMSS.json
 
-cd ~/Downloads
-rm -f Triage.sh
-
-cat > Triage.sh << 'ENDOFSCRIPT'
-#!/bin/bash
-# Volatile Data Triage Collection - Linux
-# Non-destructive | Root recommended | JSON output to ~/Downloads
-# Version: 1.1.0 (fixed)
-
 set -o pipefail
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="${HOME}/Downloads"
 OUTPUT_FILE="${OUTPUT_DIR}/VolatileTriage_${TIMESTAMP}.json"
 TMPDIR=$(mktemp -d /tmp/volatile_triage.XXXXXX)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-is_root() { [ "$(id -u)" -eq 0 ]; }
-
 section() { echo -e "\n[*] $1" >&2; }
 
-if ! is_root; then
+if [ "$(id -u)" -ne 0 ]; then
     echo "[!] WARNING: Not running as root. Some data will be incomplete." >&2
 fi
-
 mkdir -p "$OUTPUT_DIR"
 
 # ------------------------------------------------------------------
-# 1. Chain of Custody
-# ------------------------------------------------------------------
 section "Chain of Custody"
-python3 -c "
-import json, os, socket, time
+python3 -c '
+import json, os, socket
 from datetime import datetime, timezone
-custody = {
-    'ScriptVersion': '$SCRIPT_VERSION',
-    'CollectionTimeUTC': datetime.now(timezone.utc).isoformat(),
-    'CollectionTimeLocal': datetime.now().astimezone().isoformat(),
-    'Hostname': socket.gethostname(),
-    'CollectedBy': os.environ.get('USER', os.environ.get('LOGNAME', 'unknown')),
-    'UID': os.getuid(),
-    'IsRoot': os.getuid() == 0,
-    'Kernel': os.uname().release,
-    'OutputFile': '$OUTPUT_FILE',
-    'Notes': 'Non-destructive volatile triage. No system state was modified.'
-}
-print(json.dumps(custody, indent=2))
-" > "$TMPDIR/custody.json"
+print(json.dumps({
+    "ScriptVersion": "'"$SCRIPT_VERSION"'",
+    "CollectionTimeUTC": datetime.now(timezone.utc).isoformat(),
+    "CollectionTimeLocal": datetime.now().astimezone().isoformat(),
+    "Hostname": socket.gethostname(),
+    "CollectedBy": os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown",
+    "UID": os.getuid(),
+    "IsRoot": os.getuid() == 0,
+    "Kernel": os.uname().release,
+    "OutputFile": "'"$OUTPUT_FILE"'",
+    "Notes": "Non-destructive volatile triage. No system state was modified."
+}, indent=2))
+' > "$TMPDIR/custody.json"
 
-# ------------------------------------------------------------------
-# 2. System Information
 # ------------------------------------------------------------------
 section "System Information"
 python3 -c '
-import json, os, platform, subprocess
+import json, platform, subprocess
 info = {
     "Hostname": platform.node(),
     "Kernel": platform.uname().release,
     "System": platform.system(),
     "Machine": platform.machine(),
-    "Processor": platform.processor(),
-    "Python": platform.python_version(),
 }
 try:
     with open("/etc/os-release") as f:
@@ -95,11 +76,8 @@ print(json.dumps(info, indent=2))
 ' > "$TMPDIR/system.json"
 
 # ------------------------------------------------------------------
-# 3. Processes
-# ------------------------------------------------------------------
 section "Processes"
-ps -eo pid,ppid,user,stat,lstart,etime,pcpu,pmem,rss,vsz,cmd --no-headers 2>/dev/null | \
-python3 -c '
+ps -eo pid,ppid,user,stat,lstart,etime,pcpu,pmem,rss,vsz,cmd --no-headers 2>/dev/null | python3 -c '
 import sys, json
 procs = []
 for line in sys.stdin:
@@ -114,15 +92,14 @@ print(json.dumps(procs, indent=2))
 ' > "$TMPDIR/processes.json"
 
 # ------------------------------------------------------------------
-# 4. Network Connections
-# ------------------------------------------------------------------
 section "Network Connections"
 ss -tulnape 2>/dev/null | python3 -c '
 import sys, json
 conns = []
 for line in sys.stdin:
     line = line.strip()
-    if not line or line.startswith("Netid") or line.startswith("State"): continue
+    if not line or line.startswith("Netid") or line.startswith("State"):
+        continue
     parts = line.split()
     if len(parts) >= 5:
         conns.append({
@@ -136,13 +113,9 @@ print(json.dumps(conns, indent=2))
 ' > "$TMPDIR/connections.json"
 
 # ------------------------------------------------------------------
-# 5. ARP / Neighbors
-# ------------------------------------------------------------------
 section "ARP / Neighbors"
 ip -j neigh 2>/dev/null > "$TMPDIR/neighbors.json" || echo "[]" > "$TMPDIR/neighbors.json"
 
-# ------------------------------------------------------------------
-# 6. Logged-on Users
 # ------------------------------------------------------------------
 section "Logged-on Users"
 who -a 2>/dev/null | python3 -c '
@@ -155,8 +128,6 @@ for line in sys.stdin:
 print(json.dumps(users, indent=2))
 ' > "$TMPDIR/loggedon.json"
 
-# ------------------------------------------------------------------
-# 7. Shell History
 # ------------------------------------------------------------------
 section "Shell History"
 python3 -c '
@@ -180,43 +151,35 @@ print(json.dumps(histories, indent=2))
 ' > "$TMPDIR/history.json"
 
 # ------------------------------------------------------------------
-# 8. Clipboard
-# ------------------------------------------------------------------
 section "Clipboard"
 CLIP=""
 command -v xclip >/dev/null && CLIP=$(xclip -selection clipboard -o 2>/dev/null)
 command -v xsel  >/dev/null && CLIP=$(xsel --clipboard --output 2>/dev/null)
 command -v wl-paste >/dev/null && CLIP=$(wl-paste 2>/dev/null)
-python3 -c "import json,sys; print(json.dumps(sys.argv[1] or None))" "$CLIP" > "$TMPDIR/clipboard.json"
+python3 -c 'import json,sys; print(json.dumps(sys.argv[1] or None))' "$CLIP" > "$TMPDIR/clipboard.json"
 
-# ------------------------------------------------------------------
-# 9. DNS
 # ------------------------------------------------------------------
 section "DNS"
 python3 -c '
-import json, subprocess, os
+import json, subprocess
 dns = {}
 try:
     with open("/etc/resolv.conf") as f:
         dns["resolv_conf"] = f.read()
 except: pass
-for cmd in [["resolvectl","status"], ["systemd-resolve","--status"]]:
+for cmd in ["resolvectl status", "systemd-resolve --status"]:
     try:
-        dns["resolver_status"] = subprocess.getoutput(" ".join(cmd))
+        dns["resolver_status"] = subprocess.getoutput(cmd)
         break
     except: pass
 print(json.dumps(dns, indent=2))
 ' > "$TMPDIR/dns.json"
 
 # ------------------------------------------------------------------
-# 10. Interfaces + Routes
-# ------------------------------------------------------------------
 section "Network Interfaces & Routes"
 ip -j addr  > "$TMPDIR/interfaces.json" 2>/dev/null || echo "[]" > "$TMPDIR/interfaces.json"
 ip -j route > "$TMPDIR/routes.json"     2>/dev/null || echo "[]" > "$TMPDIR/routes.json"
 
-# ------------------------------------------------------------------
-# 11. Kernel Modules
 # ------------------------------------------------------------------
 section "Kernel Modules"
 lsmod 2>/dev/null | python3 -c '
@@ -231,13 +194,13 @@ print(json.dumps(mods, indent=2))
 ' > "$TMPDIR/modules.json"
 
 # ------------------------------------------------------------------
-# 12. Scheduled Tasks
-# ------------------------------------------------------------------
 section "Scheduled Tasks"
 python3 -c '
 import os, json, subprocess, glob
 data = {"user_crontabs": {}, "system_cron": [], "systemd_timers": []}
-users = ["root"] + ([d for d in os.listdir("/home") if os.path.isdir(f"/home/{d}")] if os.path.isdir("/home") else [])
+users = ["root"]
+if os.path.isdir("/home"):
+    users += [d for d in os.listdir("/home") if os.path.isdir("/home/"+d)]
 for u in users:
     try:
         out = subprocess.check_output(["crontab","-u",u,"-l"], stderr=subprocess.DEVNULL, text=True)
@@ -246,17 +209,15 @@ for u in users:
 for path in ["/etc/crontab"] + glob.glob("/etc/cron.*/*"):
     if os.path.isfile(path):
         try:
-            with open(path) as f: data["system_cron"].append({path: f.read().splitlines()})
+            with open(path) as f:
+                data["system_cron"].append({path: f.read().splitlines()})
         except: pass
 try:
-    out = subprocess.getoutput("systemctl list-timers --all --no-pager --no-legend")
-    data["systemd_timers"] = out.splitlines()
+    data["systemd_timers"] = subprocess.getoutput("systemctl list-timers --all --no-pager --no-legend").splitlines()
 except: pass
 print(json.dumps(data, indent=2))
 ' > "$TMPDIR/scheduled.json"
 
-# ------------------------------------------------------------------
-# 13. Environment
 # ------------------------------------------------------------------
 section "Environment Variables"
 env | python3 -c '
@@ -264,8 +225,6 @@ import sys, json
 print(json.dumps(dict(line.strip().split("=",1) for line in sys.stdin if "=" in line), indent=2))
 ' > "$TMPDIR/env.json"
 
-# ------------------------------------------------------------------
-# 14. Open Files (limited)
 # ------------------------------------------------------------------
 section "Open Files"
 if command -v lsof >/dev/null; then
@@ -278,16 +237,15 @@ else
 fi
 
 # ------------------------------------------------------------------
-# Final assembly
-# ------------------------------------------------------------------
 section "Writing final JSON"
 python3 -c '
 import json, os, hashlib
 def load(n):
     try:
-        with open(os.path.join("'"$TMPDIR"'", n)) as f: return json.load(f)
-    except: return None
-
+        with open("'"$TMPDIR"'/" + n) as f:
+            return json.load(f)
+    except:
+        return None
 triage = {
     "ChainOfCustody": load("custody.json"),
     "SystemInformation": load("system.json"),
@@ -305,19 +263,14 @@ triage = {
     "EnvironmentVariables": load("env.json"),
     "OpenFiles": load("lsof.json")
 }
-
 with open("'"$OUTPUT_FILE"'", "w") as f:
     json.dump(triage, f, indent=2)
-
 with open("'"$OUTPUT_FILE"'", "rb") as f:
     sha = hashlib.sha256(f.read()).hexdigest()
-
 triage["ChainOfCustody"]["OutputSHA256"] = sha
 triage["ChainOfCustody"]["FileSizeBytes"] = os.path.getsize("'"$OUTPUT_FILE"'")
-
 with open("'"$OUTPUT_FILE"'", "w") as f:
     json.dump(triage, f, indent=2)
-
 print("Output file : '"$OUTPUT_FILE"'")
 print("SHA-256     :", sha)
 print("Size        : %.2f MB" % (os.path.getsize("'"$OUTPUT_FILE"'")/1024/1024))
@@ -326,5 +279,3 @@ print("Size        : %.2f MB" % (os.path.getsize("'"$OUTPUT_FILE"'")/1024/1024))
 echo ""
 echo "Collection complete."
 ENDOFSCRIPT
-
-chmod +x Triage.sh
