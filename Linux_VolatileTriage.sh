@@ -1,7 +1,7 @@
 #!/bin/bash
 # Volatile Data Triage Collection - Linux
 # Non-destructive | Root recommended | JSON output to ~/Downloads
-# Version: 1.0.0
+# Version: 1.2.1
 #
 # How to Use
 # 1. Save as VolatileTriage.sh
@@ -278,4 +278,4 @@ print("Size        : %.2f MB" % (os.path.getsize("'"$OUTPUT_FILE"'")/1024/1024))
 
 echo ""
 echo "Collection complete."
-ENDOFSCRIPT
+# ENDOFSCRIPT
