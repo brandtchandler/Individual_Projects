@@ -1,4 +1,4 @@
-#Reset the Windows Management Instrumentation Command-line (WMIC)
+# Reset the Windows Management Instrumentation Command-line (WMIC)
 sc stop iphlpsvc
 sc stop wscsvc
 sc stop Winmgmt
